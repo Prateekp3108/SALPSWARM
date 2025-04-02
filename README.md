@@ -45,6 +45,7 @@ SSA is a nature-inspired metaheuristic algorithm that mimics the swarming behavi
 
 ---
 **Author:** Suhani Sharma and Prateek Pandey 
+
 **Affiliation:** Manipal University Jaipur  
 
 
