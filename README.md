@@ -44,7 +44,7 @@ SSA is a nature-inspired metaheuristic algorithm that mimics the swarming behavi
 - Papers on Lévy flight and Opposition-Based Learning in swarm intelligence.
 
 ---
-**Author:** [Your Name]  
+**Author:** Suhani Sharma and Prateek Pandey 
 **Affiliation:** Manipal University Jaipur  
-**Contact:** [Your Email]
+
 
