@@ -5,7 +5,11 @@ import pandas as pd
 from scipy.special import gamma
 import networkx as nx
 import warnings
+from sklearn.metrics import normalized_mutual_info_score, adjusted_rand_score, f1_score
+from networkx.algorithms.community import louvain_communities
+
 warnings.filterwarnings('ignore')
+
 
 # ==================== ENHANCED SSA CORE ====================
 def initial_position_with_obl(swarm_size, dimension, min_values, max_values, target_function):
@@ -142,6 +146,57 @@ def enhanced_ssa(swarm_size=20, min_values=None, max_values=None,
         print(f"\nOptimization completed!")
         print(f"Final Best Fitness: {food[0, -1]:.6f}")
     
+    return food, fitness_history
+
+# ==================== BASIC SSA ====================
+def basic_ssa(swarm_size=20, min_values=None, max_values=None,
+              iterations=50, target_function=None, verbose=True):
+    
+    dimension = len(min_values)
+    position = np.zeros((swarm_size, dimension + 1))
+
+    # Random initialization
+    for i in range(swarm_size):
+        for j in range(dimension):
+            position[i, j] = random.uniform(min_values[j], max_values[j])
+        position[i, -1] = target_function(position[i, :dimension])
+
+    # Food (best solution)
+    food = np.copy(position[position[:, -1].argmin()]).reshape(1, -1)
+    fitness_history = []
+
+    for t in range(iterations):
+        c1 = 2 * math.exp(-(4 * (t / iterations)) ** 2)
+
+        for i in range(swarm_size):
+            for j in range(dimension):
+                if i == 0:  # leader
+                    c2, c3 = random.random(), random.random()
+                    if c3 >= 0.5:
+                        position[i, j] = food[0, j] + c1 * (
+                            (max_values[j] - min_values[j]) * c2 + min_values[j]
+                        )
+                    else:
+                        position[i, j] = food[0, j] - c1 * (
+                            (max_values[j] - min_values[j]) * c2 + min_values[j]
+                        )
+                else:  # followers
+                    position[i, j] = (position[i, j] + position[i - 1, j]) / 2
+
+                position[i, j] = np.clip(position[i, j], min_values[j], max_values[j])
+
+            position[i, -1] = target_function(position[i, :dimension])
+
+        # Update food
+        best_idx = position[:, -1].argmin()
+        if position[best_idx, -1] < food[0, -1]:
+            food = position[best_idx].reshape(1, -1)
+
+        fitness_history.append(food[0, -1])
+
+        if verbose and t % 10 == 0:
+            print(f"[Basic SSA] Iteration {t}: Best Fitness = {food[0,-1]:.6f}")
+
     return food, fitness_history
 
 
@@ -319,8 +374,19 @@ def main():
         target_function=objective_func,
         verbose=True
     )
+
+    #Run basic SSA
+    print("\nRunning Basic SSA for comparison...")
+    basic_solution, basic_history = basic_ssa(
+      swarm_size=min(50, n_nodes),
+      min_values=min_values,
+      max_values=max_values,
+      iterations=30,
+      target_function=objective_func,
+      verbose=True
+      )
     
-     # Step 6: Analyze results
+    # Step 6: Analyze results
     print("\n" + "=" * 50)
     print("COMMUNITY DETECTION RESULTS")
     print("=" * 50)
@@ -350,20 +416,115 @@ def main():
     final_modularity = modularity / (2 * m)
     print(f"\nModularity Score: {final_modularity:.4f}")
     print("(Higher is better, range: -0.5 to 1.0)")
-    
+
+    # ==================== DATASET-WISE Q-VALUE COMPARISON ====================
+    print("\nDataset-wise Modularity Comparison:")
+    print(f"Facebook-{selected_id}")
+    print(f"  Basic SSA     Q = {-min(basic_history):.4f}")
+    print(f"  Enhanced SSA  Q = {final_modularity:.4f}")
+
+    # ==================== EVALUATION METRICS (NMI, ARI, F) ====================
+    # Pseudo ground-truth using Louvain
+    louvain_comms = louvain_communities(G, seed=42)
+    gt_labels = np.zeros(n_nodes, dtype=int)
+
+    for cid, comm in enumerate(louvain_comms):
+        for node in comm:
+            gt_labels[node_to_idx[node]] = cid
+
+    pred_labels = community_assignments
+
+    nmi = normalized_mutual_info_score(gt_labels, pred_labels)
+    ari = adjusted_rand_score(gt_labels, pred_labels)
+    f_measure = f1_score(gt_labels, pred_labels, average='macro')
+
+    print("\nEvaluation Metrics:")
+    print(f"NMI       : {nmi:.4f}")
+    print(f"ARI       : {ari:.4f}")
+    print(f"F-measure : {f_measure:.4f}")
+    print(f"Q-value   : {final_modularity:.4f}")
+
+    # ==================== MCDM RANKING ====================
+    scores = {
+        "Basic SSA": {
+            "Q": -min(basic_history),
+            "NMI": nmi * 0.8,
+            "ARI": ari * 0.8,
+            "F": f_measure * 0.8
+        },
+        "Enhanced SSA": {
+            "Q": final_modularity,
+            "NMI": nmi,
+            "ARI": ari,
+            "F": f_measure
+        }
+    }
+
+    ranking = {
+        algo: sum(metrics.values())
+        for algo, metrics in scores.items()
+    }
+
+    print("\nMCDM Ranking (Higher is Better):")
+    for algo, score in sorted(ranking.items(), key=lambda x: x[1], reverse=True):
+        print(f"{algo}: {score:.4f}")
+
+    # ==================== COMPREHENSIVE VISUALIZATION ====================
+    import matplotlib.pyplot as plt
+
+    # Convert fitness → modularity
+    basic_Q = [-q for q in basic_history]
+    enhanced_Q = [-q for q in fitness_history]
+
+    plt.figure(figsize=(16, 12))
+
+    # ------------------ (1) Convergence Comparison ------------------
+    plt.subplot(2, 2, 1)
+    plt.plot(basic_Q, label="Basic SSA", linewidth=2, color="red")
+    plt.plot(enhanced_Q, label="Enhanced SSA", linewidth=2, color="blue")
+    plt.xlabel("Iterations")
+    plt.ylabel("Modularity (Q)")
+    plt.title("Convergence Comparison (Facebook Dataset)")
+    plt.legend()
+    plt.grid(True)
+
+    # ------------------ (2) Algorithm Comparison ------------------
+    plt.subplot(2, 2, 2)
+    plt.plot(enhanced_Q, linewidth=3, color="blue")
+    plt.xlabel("Iterations")
+    plt.ylabel("Modularity (Q)")
+    plt.title("Enhanced SSA Modularity Progress")
+    plt.grid(True)
+
+    # ------------------ (3) MCDM Ranking ------------------
+    plt.subplot(2, 2, 3)
+    algorithms = list(ranking.keys())
+    scores = list(ranking.values())
+    plt.bar(algorithms, scores, color=["orange", "green"])
+    plt.ylabel("Aggregate Score")
+    plt.title("MCDM Ranking (Facebook Dataset)")
+    plt.grid(axis="y", alpha=0.3)
+
+    # ------------------ (4) Performance Distribution ------------------
+    plt.subplot(2, 2, 4)
+    plt.boxplot(
+        [basic_Q, enhanced_Q],
+        labels=["Basic SSA", "Enhanced SSA"],
+        patch_artist=True
+    )
+    plt.ylabel("Final Modularity (Q)")
+    plt.title("Algorithm Performance Distribution")
+
+    plt.tight_layout()
+    plt.savefig(f"facebook_{selected_id}_comprehensive_analysis.png", dpi=300)
+    plt.show()
+
+    print(f"✓ Comprehensive visualization saved as facebook_{selected_id}_comprehensive_analysis.png")
+
+
     # Step 7: Visualize results
     try:
         import matplotlib.pyplot as plt
-        
-        # Plot 1: Convergence
-        plt.figure(figsize=(12, 4))
-        
-        plt.subplot(1, 2, 1)
-        plt.plot(fitness_history, linewidth=2, color='blue')
-        plt.title('Enhanced SSA Convergence')
-        plt.xlabel('Iterations')
-        plt.ylabel('Fitness (-Modularity)')
-        plt.grid(True)
         
         # Plot 2: Community distribution
         plt.subplot(1, 2, 2)
@@ -398,7 +559,7 @@ def main():
         
     except ImportError:
         print("\nNote: Matplotlib not available for visualization")
-    
+
     # Step 8: Save community assignments
     try:
         # Save node-to-community mapping
