@@ -385,6 +385,44 @@ def main():
       target_function=objective_func,
       verbose=True
       )
+    # ==================== EVALUATION METRICS (NMI, ARI, F) ====================
+    louvain_comms = louvain_communities(G, seed=42)
+    gt_labels = np.zeros(n_nodes, dtype=int)
+
+    for cid, comm in enumerate(louvain_comms):
+        for node in comm:
+            gt_labels[node_to_idx[node]] = cid
+
+    
+    # ==================== BASIC SSA EVALUATION ====================
+
+    # Convert Basic SSA solution to discrete communities
+    basic_assignments = np.clip(
+        np.round(basic_solution[0, :-1]),
+        0,
+        n_communities - 1
+    ).astype(int)
+
+    # ---- Compute Modularity for Basic SSA ----
+    m = np.sum(adj_matrix) / 2
+    basic_modularity = 0
+
+    for i in range(n_nodes):
+        for j in range(n_nodes):
+            if basic_assignments[i] == basic_assignments[j]:
+                ki = np.sum(adj_matrix[i, :])
+                kj = np.sum(adj_matrix[j, :])
+                expected = (ki * kj) / (2 * m)
+                actual = adj_matrix[i, j]
+                basic_modularity += (actual - expected)
+
+    basic_modularity /= (2 * m)
+
+    # ---- Evaluation Metrics using Louvain Ground Truth ----
+    basic_nmi = normalized_mutual_info_score(gt_labels, basic_assignments)
+    basic_ari = adjusted_rand_score(gt_labels, basic_assignments)
+    basic_f = f1_score(gt_labels, basic_assignments, average='macro')
+
     
     # Step 6: Analyze results
     print("\n" + "=" * 50)
@@ -423,34 +461,36 @@ def main():
     print(f"  Basic SSA     Q = {-min(basic_history):.4f}")
     print(f"  Enhanced SSA  Q = {final_modularity:.4f}")
 
-    # ==================== EVALUATION METRICS (NMI, ARI, F) ====================
-    # Pseudo ground-truth using Louvain
-    louvain_comms = louvain_communities(G, seed=42)
-    gt_labels = np.zeros(n_nodes, dtype=int)
-
-    for cid, comm in enumerate(louvain_comms):
-        for node in comm:
-            gt_labels[node_to_idx[node]] = cid
-
     pred_labels = community_assignments
 
     nmi = normalized_mutual_info_score(gt_labels, pred_labels)
     ari = adjusted_rand_score(gt_labels, pred_labels)
     f_measure = f1_score(gt_labels, pred_labels, average='macro')
 
-    print("\nEvaluation Metrics:")
-    print(f"NMI       : {nmi:.4f}")
-    print(f"ARI       : {ari:.4f}")
-    print(f"F-measure : {f_measure:.4f}")
-    print(f"Q-value   : {final_modularity:.4f}")
+    print("\n" + "=" * 60)
+    print("EVALUATION METRICS COMPARISON")
+    print("=" * 60)
+
+    print("\nEnhanced SSA:")
+    print(f"  NMI       : {nmi:.4f}")
+    print(f"  ARI       : {ari:.4f}")
+    print(f"  F-measure : {f_measure:.4f}")
+    print(f"  Q-value   : {final_modularity:.4f}")
+
+    print("\nBasic SSA:")
+    print(f"  NMI       : {basic_nmi:.4f}")
+    print(f"  ARI       : {basic_ari:.4f}")
+    print(f"  F-measure : {basic_f:.4f}")
+    print(f"  Q-value   : {basic_modularity:.4f}")
+
 
     # ==================== MCDM RANKING ====================
     scores = {
         "Basic SSA": {
-            "Q": -min(basic_history),
-            "NMI": nmi * 0.8,
-            "ARI": ari * 0.8,
-            "F": f_measure * 0.8
+            "Q": basic_modularity,
+            "NMI": basic_nmi,
+            "ARI": basic_ari,
+            "F": basic_f
         },
         "Enhanced SSA": {
             "Q": final_modularity,
@@ -464,6 +504,7 @@ def main():
         algo: sum(metrics.values())
         for algo, metrics in scores.items()
     }
+
 
     print("\nMCDM Ranking (Higher is Better):")
     for algo, score in sorted(ranking.items(), key=lambda x: x[1], reverse=True):
